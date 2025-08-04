@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:sabbath_app/spa/suncal.dart';
 import 'package:sabbath_app/utility/appdrawer.dart';
 import 'package:sabbath_app/utility/location_helper.dart';
+
 import 'package:sabbath_app/services/alarm_service.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
@@ -123,6 +124,8 @@ static const Map<String, String> sebastianCoords = {
     60: false,
     6851: false,
   };
+  
+  int _alarmDurationSeconds = 40; // Default alarm duration
 
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool _isPlayingAlarm = false;
@@ -322,6 +325,7 @@ Future<void> _playAlarm() async {
       await _loadLastLocation();
       await _updateTimes();
       await _loadSavedReminders();
+      await _loadAlarmDuration();
     });
   }
 
@@ -391,7 +395,7 @@ Future<void> _initBackgroundService() async {
             await _alarmService.startAlarm(
               title: "Sabbath Reminder",
               body: "Sabbath time!",
-              durationSeconds: 40,
+              durationSeconds: _alarmDurationSeconds,
             );
           } else if (details.payload == 'stop_alarm') {
             // Stop alarm if user taps stop button
@@ -504,6 +508,18 @@ Future<void> _loadLastLocation() async {
     });
   }
 
+  Future<void> _loadAlarmDuration() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _alarmDurationSeconds = prefs.getInt('alarm_duration_seconds') ?? 40;
+    });
+  }
+
+  Future<void> _saveAlarmDuration() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setInt('alarm_duration_seconds', _alarmDurationSeconds);
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -541,8 +557,10 @@ Future<void> _loadLastLocation() async {
             _buildAppBar(),
             const SizedBox(height: 20),
             _buildTitle(),
-            const SizedBox(height: 30),
-            Expanded(child: _buildReminderOptions()),
+                              const SizedBox(height: 30),
+                  _buildAudioDurationSelector(),
+                  const SizedBox(height: 20),
+                  Expanded(child: _buildReminderOptions()),
             const SizedBox(height: 10),
             _buildTestAlarmButton(),
             const SizedBox(height: 10),
@@ -618,12 +636,12 @@ Future<void> _scheduleAllReminders() async {
         body: 'Sabbath begins in $minutes minutes',
         scheduledTime: startReminderTime,
       );
-      // 🔔 Schedule 40-second alarm for the same time
+      // 🔔 Schedule alarm for the same time
       _alarmService.scheduleAlarm(
         scheduledTime: startReminderTime.toLocal(),
         title: 'Sabbath Starts Soon!',
         body: 'Sabbath begins in $minutes minutes',
-        durationSeconds: 40,
+        durationSeconds: _alarmDurationSeconds,
       );
     } else {
       debugPrint('⚠️ Start reminder $minutes minutes before is in the past');
@@ -638,12 +656,12 @@ Future<void> _scheduleAllReminders() async {
         body: 'Sabbath ends in $minutes minutes',
         scheduledTime: endReminderTime,
       );
-      // 🔔 Schedule 40-second alarm for the same time
+      // 🔔 Schedule alarm for the same time
       _alarmService.scheduleAlarm(
         scheduledTime: endReminderTime.toLocal(),
         title: 'Sabbath Ends Soon!',
         body: 'Sabbath ends in $minutes minutes',
-        durationSeconds: 40,
+        durationSeconds: _alarmDurationSeconds,
       );
     } else {
       debugPrint('⚠️ End reminder $minutes minutes before is in the past');
@@ -658,12 +676,12 @@ Future<void> _scheduleAllReminders() async {
       body: 'Shabbat Shalom!',
       scheduledTime: nextStart,
     );
-    // 🔔 Schedule 40-second alarm for exact start time
+    // 🔔 Schedule alarm for exact start time
     _alarmService.scheduleAlarm(
       scheduledTime: nextStart.toLocal(),
       title: 'Sabbath Has Started!',
       body: 'Shabbat Shalom!',
-      durationSeconds: 40,
+      durationSeconds: _alarmDurationSeconds,
     );
   }
 
@@ -674,12 +692,12 @@ Future<void> _scheduleAllReminders() async {
       body: 'Have a blessed week!',
       scheduledTime: nextEnd,
     );
-    // 🔔 Schedule 40-second alarm for exact end time
+    // 🔔 Schedule alarm for exact end time
     _alarmService.scheduleAlarm(
       scheduledTime: nextEnd.toLocal(),
       title: 'Sabbath Has Ended',
       body: 'Have a blessed week!',
-      durationSeconds: 40,
+      durationSeconds: _alarmDurationSeconds,
     );
   }
 }
@@ -935,52 +953,109 @@ Widget _buildAppBar() {
     );
   }
 
-Widget _buildSaveButton() {
-  return Padding(
-    padding: const EdgeInsets.only(bottom: 90.0), // Pulls button UP a bit
-    child: Align(
-      alignment: Alignment.bottomCenter,
-      child: Container(
-        decoration: BoxDecoration(
-          gradient: const LinearGradient(
-            colors: [Color(0xFFFBB13A), Color(0xFFF4732F)],
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-          ),
-          borderRadius: BorderRadius.circular(30),
-          boxShadow: [
-            BoxShadow(
-              color: Colors.black.withOpacity(0.25),
-              blurRadius: 10,
-              offset: const Offset(0, 4),
-            ),
-          ],
-        ),
-        child: ElevatedButton(
-          onPressed: _saveReminders,
-          style: ElevatedButton.styleFrom(
-            backgroundColor: Colors.transparent,
-            shadowColor: Colors.transparent,
-            padding:
-                const EdgeInsets.symmetric(horizontal: 50, vertical: 18),
-            shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(30),
-            ),
-          ),
-          child: const Text(
-            'SAVE REMINDERS',
+  Widget _buildAudioDurationSelector() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24.0),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Audio Duration',
             style: TextStyle(
               color: Colors.white,
-              fontWeight: FontWeight.w700,
-              fontSize: 18,
-              letterSpacing: 1.2,
+              fontSize: 16,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 10),
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+            decoration: BoxDecoration(
+              color: Colors.white.withOpacity(0.1),
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: Colors.white.withOpacity(0.3)),
+            ),
+            child: DropdownButtonHideUnderline(
+              child: DropdownButton<int>(
+                value: _alarmDurationSeconds,
+                dropdownColor: const Color(0xFF2C2C2C),
+                style: const TextStyle(color: Colors.white),
+                icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
+                isExpanded: true,
+                onChanged: (int? newValue) {
+                  if (newValue != null) {
+                    setState(() {
+                      _alarmDurationSeconds = newValue;
+                    });
+                    _saveAlarmDuration();
+                  }
+                },
+                items: [
+                  const DropdownMenuItem(value: 10, child: Text('10 seconds')),
+                  const DropdownMenuItem(value: 20, child: Text('20 seconds')),
+                  const DropdownMenuItem(value: 30, child: Text('30 seconds')),
+                  const DropdownMenuItem(value: 40, child: Text('40 seconds')),
+                  const DropdownMenuItem(value: 60, child: Text('1 minute')),
+                  const DropdownMenuItem(value: 90, child: Text('1.5 minutes')),
+                  const DropdownMenuItem(value: 120, child: Text('2 minutes')),
+                  const DropdownMenuItem(value: 180, child: Text('3 minutes')),
+                  const DropdownMenuItem(value: 300, child: Text('5 minutes')),
+                  const DropdownMenuItem(value: 600, child: Text('10 minutes')),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSaveButton() {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 90.0), // Pulls button UP a bit
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: Container(
+          decoration: BoxDecoration(
+            gradient: const LinearGradient(
+              colors: [Color(0xFFFBB13A), Color(0xFFF4732F)],
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+            ),
+            borderRadius: BorderRadius.circular(30),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withOpacity(0.25),
+                blurRadius: 10,
+                offset: const Offset(0, 4),
+              ),
+            ],
+          ),
+          child: ElevatedButton(
+            onPressed: _saveReminders,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.transparent,
+              shadowColor: Colors.transparent,
+              padding:
+                  const EdgeInsets.symmetric(horizontal: 50, vertical: 18),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(30),
+              ),
+            ),
+            child: const Text(
+              'SAVE REMINDERS',
+              style: TextStyle(
+                color: Colors.white,
+                fontWeight: FontWeight.w700,
+                fontSize: 18,
+                letterSpacing: 1.2,
+              ),
             ),
           ),
         ),
       ),
-    ),
-  );
-}
+    );
+  }
 
   Widget _buildTestAlarmButton() {
     return Padding(
