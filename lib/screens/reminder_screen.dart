@@ -13,7 +13,6 @@ import 'package:timezone/data/latest.dart' as tz;
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-// Simplified approach without isolates to avoid compilation issues
 
 class ReminderScreen extends StatefulWidget {
   const ReminderScreen({super.key});
@@ -46,181 +45,372 @@ static const Map<String, String> sebastianCoords = {
     6851: false,
   };
 
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  bool _isPlayingAlarm = false;
-  Timer? _alarmStopTimer;
+  // 🎵 BULLETPROOF ALARM SYSTEM
+  final AudioPlayer _mainPlayer = AudioPlayer();
+  final AudioPlayer _backupPlayer = AudioPlayer();
+  bool _isAlarmActive = false;
+  Timer? _alarmTimer;
+  Timer? _loopTimer;
   bool _showAlarmDialog = false;
+  int _alarmProgress = 0;
+  static const int ALARM_DURATION = 40; // 40 seconds
 
-// Enhanced alarm system with background support
-Future<void> _playExtendedAlarm() async {
-  if (_isPlayingAlarm) return;
+// 🔥 BULLETPROOF 40-SECOND ALARM IMPLEMENTATION
+Future<void> _playBulletproofAlarm() async {
+  if (_isAlarmActive) {
+    debugPrint('⚠️ Alarm already active, skipping');
+    return;
+  }
 
-  setState(() {
-    _isPlayingAlarm = true;
-    _showAlarmDialog = true;
-  });
+  debugPrint('🚨 Starting 40-second bulletproof alarm');
   
+  setState(() {
+    _isAlarmActive = true;
+    _showAlarmDialog = true;
+    _alarmProgress = 0;
+  });
+
   try {
-    // 1️⃣ Stop any existing playback
-    await _audioPlayer.stop();
-    _alarmStopTimer?.cancel();
+    // 🎯 STEP 1: Configure both players for maximum reliability
+    await _configureAudioPlayers();
+    
+    // 🎯 STEP 2: Start dual-player system
+    await _startDualPlayerAlarm();
+    
+    // 🎯 STEP 3: Show interactive alarm dialog
+    _showBulletproofAlarmDialog();
+    
+    // 🎯 STEP 4: Start precision 40-second timer with progress
+    _startPrecisionTimer();
+    
+  } catch (e) {
+    debugPrint('❌ Alarm error: $e');
+    await _emergencyFallbackAlarm();
+  }
+}
 
-    // 2️⃣ Configure audio session for extended playback
-    await _audioPlayer.setAudioContext(
-      AudioContext(
-        iOS: AudioContextIOS(
-          category: AVAudioSessionCategory.playback,
-          options: {
-            AVAudioSessionOptions.defaultToSpeaker,
-            AVAudioSessionOptions.mixWithOthers,
-            AVAudioSessionOptions.allowBluetooth,
-            AVAudioSessionOptions.duckOthers,
-          },
-        ),
-        android: AudioContextAndroid(
-          isSpeakerphoneOn: true,
-          contentType: AndroidContentType.sonification,
-          usageType: AndroidUsageType.alarm,
-          audioFocus: AndroidAudioFocus.gainTransientMayDuck,
-        ),
+Future<void> _configureAudioPlayers() async {
+  // Configure main player with alarm-optimized settings
+  await _mainPlayer.setAudioContext(
+    AudioContext(
+      iOS: AudioContextIOS(
+        category: AVAudioSessionCategory.playback,
+        options: {
+          AVAudioSessionOptions.defaultToSpeaker,
+          AVAudioSessionOptions.duckOthers,
+          AVAudioSessionOptions.allowBluetooth,
+        },
       ),
-    );
+      android: AudioContextAndroid(
+        isSpeakerphoneOn: true,
+        contentType: AndroidContentType.sonification,
+        usageType: AndroidUsageType.alarm,
+        audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+      ),
+    ),
+  );
 
-    // 3️⃣ Set max volume and loop mode
-    await _audioPlayer.setVolume(1.0);
-    await _audioPlayer.setReleaseMode(ReleaseMode.loop);
+  // Configure backup player with identical settings
+  await _backupPlayer.setAudioContext(
+    AudioContext(
+      iOS: AudioContextIOS(
+        category: AVAudioSessionCategory.playback,
+        options: {
+          AVAudioSessionOptions.defaultToSpeaker,
+          AVAudioSessionOptions.duckOthers,
+        },
+      ),
+      android: AudioContextAndroid(
+        isSpeakerphoneOn: true,
+        contentType: AndroidContentType.sonification,
+        usageType: AndroidUsageType.alarm,
+      ),
+    ),
+  );
 
-    // 4️⃣ Start playback
-    await _audioPlayer.play(
+  // Set maximum volume and loop mode
+  await _mainPlayer.setVolume(1.0);
+  await _backupPlayer.setVolume(1.0);
+  await _mainPlayer.setReleaseMode(ReleaseMode.loop);
+  await _backupPlayer.setReleaseMode(ReleaseMode.loop);
+}
+
+Future<void> _startDualPlayerAlarm() async {
+  try {
+    // Start main player
+    await _mainPlayer.play(
       AssetSource('sounds/notification.mp3'),
       mode: PlayerMode.mediaPlayer,
     );
-
-    // 5️⃣ Show alarm dialog for user interaction
-    _showAlarmNotificationDialog();
-
-    // 6️⃣ Auto-stop after 40 seconds
-    _alarmStopTimer = Timer(const Duration(seconds: 40), () {
-      _stopExtendedAlarm();
-    });
-
-    // Enhanced audio session ensures longer playback
-
+    
+    // Start backup player with slight delay for redundancy
+    await Future.delayed(const Duration(milliseconds: 100));
+    await _backupPlayer.play(
+      AssetSource('sounds/notification.mp3'),
+      mode: PlayerMode.mediaPlayer,
+    );
+    
+    debugPrint('✅ Dual-player alarm system started');
   } catch (e) {
-    debugPrint('Extended alarm error: $e');
-    // Fallback to short alarm
-    await _playFallbackAlarm();
+    debugPrint('⚠️ Dual-player start failed: $e');
+    // Try single player as fallback
+    await _mainPlayer.play(AssetSource('sounds/notification.mp3'));
   }
 }
 
-// Background service methods removed for simplicity
+void _startPrecisionTimer() {
+  _alarmTimer?.cancel();
+  _loopTimer?.cancel();
+  
+  // Main 40-second timer
+  _alarmTimer = Timer(const Duration(seconds: ALARM_DURATION), () {
+    debugPrint('⏰ 40-second alarm completed');
+    _stopBulletproofAlarm();
+  });
+  
+  // Progress update timer (every second)
+  _loopTimer = Timer.periodic(const Duration(seconds: 1), (timer) {
+    if (!_isAlarmActive) {
+      timer.cancel();
+      return;
+    }
+    
+    setState(() {
+      _alarmProgress++;
+    });
+    
+    // Restart audio if it stops (bulletproof measure)
+    _verifyAudioPlayback();
+    
+    if (_alarmProgress >= ALARM_DURATION) {
+      timer.cancel();
+    }
+  });
+}
 
-Future<void> _stopExtendedAlarm() async {
-  if (!_isPlayingAlarm) return;
-
+void _verifyAudioPlayback() async {
   try {
-    // Stop main player
-    _alarmStopTimer?.cancel();
-    await _audioPlayer.stop();
-    
-    // Enhanced audio session provides better control
-    
-    // Update UI
-    if (mounted) {
-      setState(() {
-        _isPlayingAlarm = false;
-        _showAlarmDialog = false;
-      });
-      Navigator.of(context).popUntil((route) => route.isFirst);
+    // Check if main player is still playing
+    final mainState = await _mainPlayer.getCurrentPosition();
+    if (mainState == null || mainState == Duration.zero) {
+      debugPrint('🔄 Restarting main player');
+      await _mainPlayer.play(AssetSource('sounds/notification.mp3'));
     }
   } catch (e) {
-    debugPrint('Error stopping extended alarm: $e');
+    debugPrint('🔄 Audio verification failed, using backup: $e');
+    try {
+      await _backupPlayer.play(AssetSource('sounds/notification.mp3'));
+    } catch (backupError) {
+      debugPrint('❌ Backup player failed: $backupError');
+    }
   }
 }
 
-Future<void> _playFallbackAlarm() async {
-  // Fallback method for older devices
+Future<void> _stopBulletproofAlarm() async {
+  if (!_isAlarmActive) return;
+  
+  debugPrint('🛑 Stopping bulletproof alarm');
+  
+  // Cancel all timers
+  _alarmTimer?.cancel();
+  _loopTimer?.cancel();
+  
+  // Stop both players
   try {
-    await _audioPlayer.setVolume(1.0);
-    await _audioPlayer.setReleaseMode(ReleaseMode.loop);
-    await _audioPlayer.play(AssetSource('sounds/notification.mp3'));
+    await _mainPlayer.stop();
+    await _backupPlayer.stop();
+  } catch (e) {
+    debugPrint('⚠️ Error stopping players: $e');
+  }
+  
+  // Update UI state
+  if (mounted) {
+    setState(() {
+      _isAlarmActive = false;
+      _showAlarmDialog = false;
+      _alarmProgress = 0;
+    });
     
-    Timer(const Duration(seconds: 40), () async {
-      await _audioPlayer.stop();
-      if (mounted) setState(() => _isPlayingAlarm = false);
+    // Close any open dialogs
+    Navigator.of(context).popUntil((route) => route.isFirst);
+  }
+}
+
+Future<void> _emergencyFallbackAlarm() async {
+  debugPrint('🚨 Emergency fallback alarm activated');
+  
+  try {
+    final fallbackPlayer = AudioPlayer();
+    await fallbackPlayer.setVolume(1.0);
+    await fallbackPlayer.setReleaseMode(ReleaseMode.loop);
+    await fallbackPlayer.play(AssetSource('sounds/notification.mp3'));
+    
+    // Emergency 40-second timer
+    Timer(const Duration(seconds: ALARM_DURATION), () async {
+      await fallbackPlayer.stop();
+      await fallbackPlayer.dispose();
+      if (mounted) {
+        setState(() {
+          _isAlarmActive = false;
+          _showAlarmDialog = false;
+        });
+      }
     });
   } catch (e) {
-    debugPrint('Fallback alarm error: $e');
+    debugPrint('❌ Emergency fallback failed: $e');
   }
 }
 
-void _showAlarmNotificationDialog() {
+void _showBulletproofAlarmDialog() {
   if (!mounted || !_showAlarmDialog) return;
   
   showDialog(
     context: context,
     barrierDismissible: false,
     builder: (BuildContext context) {
-      return WillPopScope(
-        onWillPop: () async => false,
-        child: AlertDialog(
-          backgroundColor: const Color(0xFF1E1E1E),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Row(
-            children: [
-              Icon(Icons.notifications_active, color: Color(0xFFF4732F), size: 30),
-              SizedBox(width: 10),
-              Text('Sabbath Reminder', style: TextStyle(color: Colors.white, fontSize: 20)),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Sabbath time notification',
-                style: TextStyle(color: Colors.white70, fontSize: 16),
-                textAlign: TextAlign.center,
+      return StatefulBuilder(
+        builder: (context, setDialogState) {
+          // Update dialog every second
+          Timer.periodic(const Duration(seconds: 1), (timer) {
+            if (!_isAlarmActive || !mounted) {
+              timer.cancel();
+              return;
+            }
+            setDialogState(() {});
+          });
+          
+          final progress = _alarmProgress / ALARM_DURATION;
+          final remainingSeconds = ALARM_DURATION - _alarmProgress;
+          
+          return WillPopScope(
+            onWillPop: () async => false,
+            child: AlertDialog(
+              backgroundColor: const Color(0xFF1E1E1E),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(20),
               ),
-              const SizedBox(height: 20),
-              LinearProgressIndicator(
-                backgroundColor: Colors.grey[700],
-                valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFF4732F)),
+              title: Row(
+                children: [
+                  Icon(
+                    Icons.alarm,
+                    color: Colors.red[400],
+                    size: 30,
+                  ),
+                  const SizedBox(width: 10),
+                  const Text(
+                    'Sabbath Reminder',
+                    style: TextStyle(
+                      color: Colors.white,
+                      fontSize: 20,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
               ),
-              const SizedBox(height: 10),
-              const Text(
-                'Alarm will stop automatically in 40 seconds',
-                style: TextStyle(color: Colors.white54, fontSize: 12),
-                textAlign: TextAlign.center,
+              content: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Text(
+                    '🕯️ Sabbath Time Notification',
+                    style: TextStyle(
+                      color: Colors.white70,
+                      fontSize: 16,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                  const SizedBox(height: 20),
+                  
+                  // Progress Bar
+                  Container(
+                    padding: const EdgeInsets.all(4),
+                    decoration: BoxDecoration(
+                      color: Colors.grey[800],
+                      borderRadius: BorderRadius.circular(10),
+                    ),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      backgroundColor: Colors.grey[700],
+                      valueColor: AlwaysStoppedAnimation<Color>(
+                        remainingSeconds <= 10 ? Colors.red : const Color(0xFFF4732F),
+                      ),
+                      minHeight: 8,
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 15),
+                  
+                  // Countdown Display
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                    decoration: BoxDecoration(
+                      color: remainingSeconds <= 10 ? Colors.red[900] : const Color(0xFFF4732F),
+                      borderRadius: BorderRadius.circular(20),
+                    ),
+                    child: Text(
+                      '${remainingSeconds}s remaining',
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 14,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                  ),
+                  
+                  const SizedBox(height: 10),
+                  
+                  Text(
+                    'Alarm will stop automatically',
+                    style: TextStyle(
+                      color: Colors.white54,
+                      fontSize: 12,
+                    ),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
               ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: _stopExtendedAlarm,
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFFF4732F),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              child: const Text('STOP ALARM', style: TextStyle(fontWeight: FontWeight.bold)),
+              actions: [
+                // Stop Button
+                Container(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    onPressed: _stopBulletproofAlarm,
+                    icon: const Icon(Icons.stop, color: Colors.white),
+                    label: const Text(
+                      'STOP ALARM',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontWeight: FontWeight.bold,
+                        fontSize: 16,
+                      ),
+                    ),
+                    style: ElevatedButton.styleFrom(
+                      backgroundColor: Colors.red[600],
+                      padding: const EdgeInsets.symmetric(vertical: 12),
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
             ),
-          ],
-        ),
+          );
+        },
       );
     },
   );
 }
 
-// Keep the original method for backward compatibility
+// Keep original method for backward compatibility
 Future<void> _playAlarm() async {
-  // Use the enhanced version
-  await _playExtendedAlarm();
+  await _playBulletproofAlarm();
 }
 
   @override
   void initState() {
     super.initState();
     notificationPlugin = FlutterLocalNotificationsPlugin();
+    WidgetsBinding.instance.addObserver(this);
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _initNotification();
@@ -230,17 +420,22 @@ Future<void> _playAlarm() async {
     });
   }
 
-// Background service removed to avoid compilation issues
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    super.didChangeAppLifecycleState(state);
+    
+    if (state == AppLifecycleState.paused && _isAlarmActive) {
+      // Keep alarm running in background
+      debugPrint('📱 App backgrounded - alarm continues');
+    } else if (state == AppLifecycleState.resumed && _isAlarmActive) {
+      // Verify alarm is still running when app resumes
+      debugPrint('📱 App resumed - verifying alarm');
+      _verifyAudioPlayback();
+    }
+  }
 
   Future<void> _initNotification() async {
     try {
-      // Request notification permission
-      // final status = await Permission.notification.request();
-      // if (!status.isGranted) {
-      //   debugPrint('Notification permission not granted');
-      //   return;
-      // }
-
       // Android-specific permissions
       if (Platform.isAndroid) {
         final batteryStatus =
@@ -265,8 +460,7 @@ Future<void> _playAlarm() async {
         tz.setLocalLocation(tz.getLocation(currentTimeZone));
       }
 
-
-      // Notification plugin initialization - using @mipmap/ic_stat
+      // Notification plugin initialization
       const AndroidInitializationSettings androidSettings =
           AndroidInitializationSettings('@mipmap/ic_stat');
 
@@ -283,16 +477,16 @@ Future<void> _playAlarm() async {
       await notificationPlugin.initialize(
         initializationSettings,
         onDidReceiveNotificationResponse: (details) async {
-          // Enhanced notification response - trigger extended alarm
+          // 🔥 Trigger bulletproof alarm when notification is tapped
           if (details.payload == 'alarm') {
-            await _playExtendedAlarm();
+            await _playBulletproofAlarm();
           }
         },
       );
 
-      debugPrint('Notification service initialized');
+      debugPrint('✅ Notification service initialized');
     } catch (e) {
-      debugPrint('Error initializing notifications: $e');
+      debugPrint('❌ Error initializing notifications: $e');
     }
   }
 
@@ -830,10 +1024,492 @@ Widget _buildSaveButton() {
   );
 }
 
+Future<void> _updateTimes() async {
+    if (_isLoadingLocation) return;
+    setState(() => _isLoadingLocation = true);
+
+    try {
+      if (testSebastianMode) {
+        setState(() {
+          latitude = sebastianCoords['lat']!;
+          longitude = sebastianCoords['lng']!;
+        });
+        await _saveTestLocation();
+      } else {
+        final position = await LocationHelper.getCurrentLocation(context);
+        if (position != null && _isValidLocation(position.latitude, position.longitude)) {
+          await _saveLocation(position);
+          setState(() {
+            latitude = position.latitude.toStringAsFixed(6);
+            longitude = position.longitude.toStringAsFixed(6);
+          });
+        }
+      }
+    } catch (e) {
+      debugPrint('Error updating location: $e');
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Location error: ${e.toString()}')),
+      );
+    } finally {
+      setState(() => _isLoadingLocation = false);
+    }
+  }
+
+  Future<void> _saveTestLocation() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('last_latitude', sebastianCoords['lat']!);
+    await prefs.setString('last_longitude', sebastianCoords['lng']!);
+  }
+
+  Future<void> _saveLocation(Position position) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setDouble('last_latitude', position.latitude);
+    await prefs.setDouble('last_longitude', position.longitude);
+  }
+
+Future<void> _loadLastLocation() async {
+  final prefs = await SharedPreferences.getInstance();
+  try {
+    final latValue = prefs.get('last_latitude');
+    final lngValue = prefs.get('last_longitude');
+
+    double? lastLat;
+    double? lastLng;
+
+    if (latValue is double) {
+      lastLat = latValue;
+    } else if (latValue is String) {
+      lastLat = double.tryParse(latValue);
+    }
+
+    if (lngValue is double) {
+      lastLng = lngValue;
+    } else if (lngValue is String) {
+      lastLng = double.tryParse(lngValue);
+    }
+
+    if (lastLat != null && lastLng != null) {
+      setState(() {
+        latitude = lastLat!.toStringAsFixed(6);
+        longitude = lastLng!.toStringAsFixed(6);
+      });
+    }
+  } catch (e) {
+    debugPrint('Error loading saved location: $e');
+  }
+}
+
+  bool _isValidLocation(double lat, double lng) {
+    if (lat.abs() > 90 || lng.abs() > 180) return false;
+    if (lat == 0 && lng == 0) return false;
+    return true;
+  }
+
+  Future<void> _loadSavedReminders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final savedTimes = prefs.getStringList('sabbath_reminders') ?? [];
+
+    setState(() {
+      for (final timeStr in savedTimes) {
+        final time = int.tryParse(timeStr);
+        if (time != null && reminderTimes.containsKey(time)) {
+          reminderTimes[time] = true;
+        }
+      }
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      key: _scaffoldKey,
+      drawer: AppDrawer(appTitle: 'Sabbath App', appVersion: 'v2.0.4'),
+  body: Stack(
+  children: [
+    Container(
+      decoration: const BoxDecoration(
+        image: DecorationImage(
+          image: AssetImage('assets/images/sabbathback.jpeg'),
+          fit: BoxFit.cover,
+        ),
+      ),
+    ),
+    Container(
+      color: Colors.black.withOpacity(0.5),
+    ),
+    SafeArea(
+      child: Padding(
+        padding: const EdgeInsets.only(top: 10.0),
+        child: Column(
+          children: [
+            _buildAppBar(),
+            const SizedBox(height: 20),
+            _buildTitle(),
+            const SizedBox(height: 30),
+            Expanded(child: _buildReminderOptions()),
+            const SizedBox(height: 10),
+            _buildSaveButton(),
+          ],
+        ),
+      ),
+    ),
+  ],
+),
+    );
+  }
+
+  Future<void> _saveReminders() async {
+    final prefs = await SharedPreferences.getInstance();
+    final selectedTimes = reminderTimes.entries
+        .where((e) => e.value)
+        .map((e) => e.key.toString())
+        .toList();
+
+    await prefs.setStringList('sabbath_reminders', selectedTimes);
+    await _scheduleAllReminders();
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(
+          selectedTimes.isEmpty
+              ? 'Reminders cleared'
+              : '${selectedTimes.length} reminder(s) set for both start and end',
+        ),
+        duration: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+Future<void> _scheduleAllReminders() async {
+  await notificationPlugin.cancelAll();
+
+  final now = tz.TZDateTime.now(tz.local);
+  final nextStart = _calculateNextSabbathStart(now);
+  final nextEnd = _calculateNextSabbathEnd(now);
+
+  debugPrint('\n=== SABBATH REMINDER SCHEDULING ===');
+  debugPrint('⏰ Current Time: ${now.toLocal()}');
+  debugPrint('🕯️ Next Sabbath Start: ${nextStart.toLocal()}');
+  debugPrint('🔚 Next Sabbath End: ${nextEnd.toLocal()}');
+
+  if (nextStart.isBefore(now)) {
+    debugPrint('⚠️ Next Sabbath start is in the past! Not scheduling reminders.');
+    return;
+  }
+
+  if (nextEnd.isBefore(now)) {
+    debugPrint('⚠️ Next Sabbath end is in the past! Not scheduling reminders.');
+    return;
+  }
+
+  for (final entry in reminderTimes.entries.where((e) => e.value)) {
+    final minutes = entry.key;
+    final duration = Duration(minutes: minutes);
+
+    final startReminderTime = nextStart.subtract(duration);
+    if (startReminderTime.isAfter(now)) {
+      await _scheduleWithVerification(
+        id: 'start_$minutes'.hashCode,
+        title: 'Sabbath Starts Soon!',
+        body: 'Sabbath begins in $minutes minutes',
+        scheduledTime: startReminderTime,
+      );
+    }
+
+    final endReminderTime = nextEnd.subtract(duration);
+    if (endReminderTime.isAfter(now)) {
+      await _scheduleWithVerification(
+        id: 'end_$minutes'.hashCode,
+        title: 'Sabbath Ends Soon!',
+        body: 'Sabbath ends in $minutes minutes',
+        scheduledTime: endReminderTime,
+      );
+    }
+  }
+
+  if (nextStart.isAfter(now)) {
+    await _scheduleWithVerification(
+      id: 'exact_start'.hashCode,
+      title: 'Sabbath Has Started!',
+      body: 'Shabbat Shalom!',
+      scheduledTime: nextStart,
+    );
+  }
+
+  if (nextEnd.isAfter(now)) {
+    await _scheduleWithVerification(
+      id: 'exact_end'.hashCode,
+      title: 'Sabbath Has Ended',
+      body: 'Have a blessed week!',
+      scheduledTime: nextEnd,
+    );
+  }
+}
+
+Future<void> _scheduleWithVerification({
+  required int id,
+  required String title,
+  required String body,
+  required tz.TZDateTime scheduledTime,
+}) async {
+  try {
+    await notificationPlugin.cancel(id);
+
+    await notificationPlugin.zonedSchedule(
+      id,
+      title,
+      body,
+      scheduledTime,
+      NotificationDetails(
+        android: AndroidNotificationDetails(
+          'sabbath_channel_id',
+          'Sabbath Reminders',
+          channelDescription: 'Sabbath start and end reminders',
+          icon: '@mipmap/ic_stat',
+          color: const Color(0xFFF4732F),
+          importance: Importance.max,
+          priority: Priority.high,
+          playSound: true,
+          sound: const RawResourceAndroidNotificationSound('notification'),
+          enableVibration: true,
+          fullScreenIntent: true,
+          ongoing: true,
+          visibility: NotificationVisibility.public,
+          timeoutAfter: 0,
+        ),
+        iOS: const DarwinNotificationDetails(
+          sound: 'notification.caf',
+          presentAlert: true,
+          presentBadge: true,
+          presentSound: true,
+          interruptionLevel: InterruptionLevel.timeSensitive,
+        ),
+      ),
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      payload: 'alarm',
+      matchDateTimeComponents: null,
+    );
+
+    final pending = await notificationPlugin.pendingNotificationRequests();
+    if (pending.any((n) => n.id == id)) {
+      debugPrint('✓ Scheduled: $title at ${scheduledTime.toLocal()}');
+    } else {
+      debugPrint('✗ Failed to schedule: $title');
+    }
+  } catch (e) {
+    debugPrint('Error scheduling: $e');
+    rethrow;
+  }
+}
+
+tz.TZDateTime _calculateNextSabbathStart(DateTime now) {
+  final location = tz.local;
+  final localNow = tz.TZDateTime.from(now, location);
+  
+  var daysUntilFriday = (DateTime.friday - localNow.weekday + 7) % 7;
+  var nextFriday = tz.TZDateTime(
+    location,
+    localNow.year,
+    localNow.month,
+    localNow.day + daysUntilFriday,
+  );
+
+  var sunset = _calculateSunsetTime(nextFriday);
+  
+  if (daysUntilFriday == 0 && localNow.isAfter(sunset)) {
+    nextFriday = tz.TZDateTime(
+      location,
+      localNow.year,
+      localNow.month,
+      localNow.day + 7,
+    );
+    sunset = _calculateSunsetTime(nextFriday);
+  }
+  
+  return sunset;
+}
+
+String _weekdayName(int weekday) {
+  return const [
+    'Monday', 'Tuesday', 'Wednesday', 'Thursday', 
+    'Friday', 'Saturday', 'Sunday',
+  ][weekday - 1];
+}
+
+  tz.TZDateTime _calculateNextSabbathEnd(DateTime now) {
+    final start = _calculateNextSabbathStart(now);
+    final location = tz.local;
+    
+    final saturdayDate = tz.TZDateTime(
+      location,
+      start.year,
+      start.month,
+      start.day + 1,
+    );
+
+    final saturdaySunset = _calculateSunsetTime(saturdayDate);
+    return saturdaySunset;
+  }
+
+tz.TZDateTime _calculateSunsetTime(tz.TZDateTime date) {
+  try {
+    final lat = testSebastianMode 
+        ? double.parse(sebastianCoords['lat']!)
+        : double.tryParse(latitude) ?? 0.0;
+        
+    final lng = testSebastianMode
+        ? double.parse(sebastianCoords['lng']!)
+        : double.tryParse(longitude) ?? 0.0;
+
+    if (lat == 0.0 || lng == 0.0) {
+      return tz.TZDateTime(date.location, date.year, date.month, date.day, 18, 0);
+    }
+
+    final sunsetUtc = SunCalculator.calculateSunset(
+      DateTime.utc(date.year, date.month, date.day),
+      lat,
+      lng,
+      Duration.zero,
+    );
+
+    final sunsetLocal = tz.TZDateTime.from(sunsetUtc, date.location);
+    
+    return tz.TZDateTime(
+      date.location,
+      date.year,
+      date.month,
+      date.day,
+      sunsetLocal.hour,
+      sunsetLocal.minute,
+    );
+  } catch (e) {
+    debugPrint("Sunset calculation error: $e");
+    return tz.TZDateTime(date.location, date.year, date.month, date.day, 18, 0);
+  }
+}
+
+Widget _buildAppBar() {
+  return Padding(
+    padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 0.0),
+    child: Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        IconButton(
+          icon: const Icon(Icons.menu, color: Colors.white, size: 28),
+          onPressed: () => _scaffoldKey.currentState?.openDrawer(),
+        ),
+        const Expanded(
+          child: Center(
+            child: Text(
+              'REMINDER',
+              style: TextStyle(
+                color: Colors.white,
+                fontSize: 22,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ),
+        ),
+        const SizedBox(width: 48),
+      ],
+    ),
+  );
+}
+
+  Widget _buildTitle() {
+    return const Padding(
+      padding: EdgeInsets.symmetric(horizontal: 24.0),
+      child: Text(
+        'Set reminder time for when Sabbath starts and ends',
+        style: TextStyle(
+          color: Colors.white,
+          fontSize: 18,
+          fontWeight: FontWeight.bold,
+        ),
+        textAlign: TextAlign.center,
+      ),
+    );
+  }
+
+  Widget _buildReminderOptions() {
+    return ListView.builder(
+      padding: const EdgeInsets.symmetric(horizontal: 24.0),
+      itemCount: reminderTimes.length,
+      itemBuilder: (context, index) {
+        final key = reminderTimes.keys.elementAt(index);
+        final displayText = key > 60
+            ? '${(key / 60).toStringAsFixed(key % 60 == 0 ? 0 : 1)} Hour${key >= 120 ? 's' : ''}'
+            : '$key Minute${key == 1 ? '' : 's'}';
+        return CheckboxListTile(
+          title: Text(displayText, style: const TextStyle(color: Colors.white)),
+          value: reminderTimes[key],
+          onChanged: (bool? value) =>
+              setState(() => reminderTimes[key] = value ?? false),
+          activeColor: const Color(0xFFF4732F),
+          checkColor: Colors.white,
+          checkboxShape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(4.0),
+          ),
+          side: const BorderSide(color: Colors.white),
+          controlAffinity: ListTileControlAffinity.leading,
+        );
+      },
+    );
+  }
+
+Widget _buildSaveButton() {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 90.0),
+    child: Align(
+      alignment: Alignment.bottomCenter,
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFFFBB13A), Color(0xFFF4732F)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(30),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.25),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
+        ),
+        child: ElevatedButton(
+          onPressed: _saveReminders,
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            padding: const EdgeInsets.symmetric(horizontal: 50, vertical: 18),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(30),
+            ),
+          ),
+          child: const Text(
+            'SAVE REMINDERS',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w700,
+              fontSize: 18,
+              letterSpacing: 1.2,
+            ),
+          ),
+        ),
+      ),
+    ),
+  );
+}
+
   @override
   void dispose() {
-    _alarmStopTimer?.cancel();
-    _audioPlayer.dispose();
+    _alarmTimer?.cancel();
+    _loopTimer?.cancel();
+    _mainPlayer.dispose();
+    _backupPlayer.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }
 }
