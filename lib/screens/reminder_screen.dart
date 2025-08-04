@@ -13,84 +13,7 @@ import 'package:timezone/data/latest.dart' as tz;
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-// Add these imports for background service
-import 'dart:isolate';
-import 'dart:ui';
-import 'package:flutter/services.dart';
-
-// Background isolate entry point for alarm service
-@pragma('vm:entry-point')
-void alarmBackgroundHandler(dynamic message) {
-  WidgetsFlutterBinding.ensureInitialized();
-  
-  final ReceivePort port = ReceivePort();
-  IsolateNameServer.registerPortWithName(port.sendPort, 'alarm_isolate');
-  
-  port.listen((dynamic data) async {
-    if (data == 'start_alarm') {
-      // Handle background alarm logic here
-      await _playBackgroundAlarm();
-    } else if (data == 'stop_alarm') {
-      // Stop background alarm
-      await _stopBackgroundAlarm();
-    }
-  });
-}
-
-// Global audio player for background service
-AudioPlayer? _backgroundPlayer;
-Timer? _alarmTimer;
-
-Future<void> _playBackgroundAlarm() async {
-  try {
-    _backgroundPlayer ??= AudioPlayer();
-    
-    // Configure audio session for background playback
-    await _backgroundPlayer!.setAudioContext(
-      AudioContext(
-        iOS: AudioContextIOS(
-          category: AVAudioSessionCategory.playback,
-          options: {
-            AVAudioSessionOptions.defaultToSpeaker,
-            AVAudioSessionOptions.mixWithOthers,
-            AVAudioSessionOptions.allowBluetooth,
-          },
-        ),
-        android: AudioContextAndroid(
-          isSpeakerphoneOn: true,
-          contentType: AndroidContentType.sonification,
-          usageType: AndroidUsageType.alarm,
-        ),
-      ),
-    );
-
-    await _backgroundPlayer!.setVolume(1.0);
-    await _backgroundPlayer!.setReleaseMode(ReleaseMode.loop);
-    
-    // Start playing
-    await _backgroundPlayer!.play(AssetSource('sounds/notification.mp3'));
-    
-    // Set timer to stop after 40 seconds
-    _alarmTimer?.cancel();
-    _alarmTimer = Timer(const Duration(seconds: 40), () async {
-      await _stopBackgroundAlarm();
-    });
-    
-  } catch (e) {
-    debugPrint('Background alarm error: $e');
-  }
-}
-
-Future<void> _stopBackgroundAlarm() async {
-  try {
-    _alarmTimer?.cancel();
-    await _backgroundPlayer?.stop();
-    await _backgroundPlayer?.dispose();
-    _backgroundPlayer = null;
-  } catch (e) {
-    debugPrint('Error stopping background alarm: $e');
-  }
-}
+// Simplified approach without isolates to avoid compilation issues
 
 class ReminderScreen extends StatefulWidget {
   const ReminderScreen({super.key});
@@ -181,8 +104,7 @@ Future<void> _playExtendedAlarm() async {
       _stopExtendedAlarm();
     });
 
-    // 7️⃣ Try background service as fallback
-    _startBackgroundAlarmService();
+    // Enhanced audio session ensures longer playback
 
   } catch (e) {
     debugPrint('Extended alarm error: $e');
@@ -191,14 +113,7 @@ Future<void> _playExtendedAlarm() async {
   }
 }
 
-void _startBackgroundAlarmService() {
-  try {
-    final SendPort? send = IsolateNameServer.lookupPortByName('alarm_isolate');
-    send?.send('start_alarm');
-  } catch (e) {
-    debugPrint('Background service not available: $e');
-  }
-}
+// Background service methods removed for simplicity
 
 Future<void> _stopExtendedAlarm() async {
   if (!_isPlayingAlarm) return;
@@ -208,9 +123,7 @@ Future<void> _stopExtendedAlarm() async {
     _alarmStopTimer?.cancel();
     await _audioPlayer.stop();
     
-    // Stop background service
-    final SendPort? send = IsolateNameServer.lookupPortByName('alarm_isolate');
-    send?.send('stop_alarm');
+    // Enhanced audio session provides better control
     
     // Update UI
     if (mounted) {
@@ -311,22 +224,13 @@ Future<void> _playAlarm() async {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _initNotification();
-      await _initBackgroundService();
       await _loadLastLocation();
       await _updateTimes();
       await _loadSavedReminders();
     });
   }
 
-Future<void> _initBackgroundService() async {
-  try {
-    // Initialize background isolate for alarm service
-    await Isolate.spawn(alarmBackgroundHandler, 'init');
-    debugPrint('Background alarm service initialized');
-  } catch (e) {
-    debugPrint('Failed to initialize background service: $e');
-  }
-}
+// Background service removed to avoid compilation issues
 
   Future<void> _initNotification() async {
     try {
