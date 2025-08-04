@@ -8,91 +8,11 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:sabbath_app/spa/suncal.dart';
 import 'package:sabbath_app/utility/appdrawer.dart';
 import 'package:sabbath_app/utility/location_helper.dart';
-
-import 'package:sabbath_app/services/alarm_service.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:flutter_timezone/flutter_timezone.dart';
 import 'package:device_info_plus/device_info_plus.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-// Add these imports for background service
-import 'dart:isolate';
-import 'dart:ui';
-import 'package:flutter/services.dart';
-
-// Background isolate entry point for alarm service
-@pragma('vm:entry-point')
-void alarmBackgroundHandler(dynamic message) {
-  WidgetsFlutterBinding.ensureInitialized();
-  
-  final ReceivePort port = ReceivePort();
-  IsolateNameServer.registerPortWithName(port.sendPort, 'alarm_isolate');
-  
-  port.listen((dynamic data) async {
-    if (data == 'start_alarm') {
-      // Handle background alarm logic here
-      await _playBackgroundAlarm();
-    } else if (data == 'stop_alarm') {
-      // Stop background alarm
-      await _stopBackgroundAlarm();
-    }
-  });
-}
-
-// Global audio player for background service
-AudioPlayer? _backgroundPlayer;
-Timer? _alarmTimer;
-
-Future<void> _playBackgroundAlarm() async {
-  try {
-    _backgroundPlayer ??= AudioPlayer();
-    
-    // Configure audio session for background playback
-    await _backgroundPlayer!.setAudioContext(
-      AudioContext(
-        iOS: AudioContextIOS(
-          category: AVAudioSessionCategory.playback,
-          options: {
-            AVAudioSessionOptions.defaultToSpeaker,
-            AVAudioSessionOptions.mixWithOthers,
-            AVAudioSessionOptions.allowBluetooth,
-          },
-        ),
-        android: AudioContextAndroid(
-          isSpeakerphoneOn: true,
-          contentType: AndroidContentType.sonification,
-          usageType: AndroidUsageType.alarm,
-        ),
-      ),
-    );
-
-    await _backgroundPlayer!.setVolume(1.0);
-    await _backgroundPlayer!.setReleaseMode(ReleaseMode.loop);
-    
-    // Start playing
-    await _backgroundPlayer!.play(AssetSource('sounds/notification.mp3'));
-    
-    // Set timer to stop after 40 seconds
-    _alarmTimer?.cancel();
-    _alarmTimer = Timer(const Duration(seconds: 40), () async {
-      await _stopBackgroundAlarm();
-    });
-    
-  } catch (e) {
-    debugPrint('Background alarm error: $e');
-  }
-}
-
-Future<void> _stopBackgroundAlarm() async {
-  try {
-    _alarmTimer?.cancel();
-    await _backgroundPlayer?.stop();
-    await _backgroundPlayer?.dispose();
-    _backgroundPlayer = null;
-  } catch (e) {
-    debugPrint('Error stopping background alarm: $e');
-  }
-}
 
 class ReminderScreen extends StatefulWidget {
   const ReminderScreen({super.key});
@@ -124,38 +44,30 @@ static const Map<String, String> sebastianCoords = {
     60: false,
     6851: false,
   };
-  
-  int _alarmDurationSeconds = 40; // Default alarm duration
 
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool _isPlayingAlarm = false;
-  final AlarmService _alarmService = AlarmService();
-  Timer? _alarmStopTimer;
-  bool _showAlarmDialog = false;
+  Timer? _alarmTimer;
+  final Map<String, Timer> _scheduledAudioTimers = {};
 
-// Enhanced alarm system with background support
-Future<void> _playExtendedAlarm() async {
+// 🔊 BULLETPROOF AUDIO SOLUTION - Independent from notifications
+Future<void> _playAlarmIndependently() async {
   if (_isPlayingAlarm) return;
 
-  setState(() {
-    _isPlayingAlarm = true;
-    _showAlarmDialog = true;
-  });
+  setState(() => _isPlayingAlarm = true);
   
   try {
-    // 1️⃣ Stop any existing playback
+    // Stop any existing playback
     await _audioPlayer.stop();
-    _alarmStopTimer?.cancel();
+    _alarmTimer?.cancel();
 
-    // 2️⃣ Configure audio session for extended playback
+    // Configure audio session for maximum compatibility
     await _audioPlayer.setAudioContext(
       AudioContext(
         iOS: AudioContextIOS(
           category: AVAudioSessionCategory.playback,
           options: {
             AVAudioSessionOptions.defaultToSpeaker,
-            AVAudioSessionOptions.mixWithOthers,
-            AVAudioSessionOptions.allowBluetooth,
             AVAudioSessionOptions.duckOthers,
           },
         ),
@@ -163,154 +75,60 @@ Future<void> _playExtendedAlarm() async {
           isSpeakerphoneOn: true,
           contentType: AndroidContentType.sonification,
           usageType: AndroidUsageType.alarm,
-          audioFocus: AndroidAudioFocus.gainTransientMayDuck,
         ),
       ),
     );
 
-    // 3️⃣ Set max volume and loop mode
+    // Set maximum volume and loop mode
     await _audioPlayer.setVolume(1.0);
     await _audioPlayer.setReleaseMode(ReleaseMode.loop);
 
-    // 4️⃣ Start playback
+    // Start playback
     await _audioPlayer.play(
       AssetSource('sounds/notification.mp3'),
       mode: PlayerMode.mediaPlayer,
     );
 
-    // 5️⃣ Show alarm dialog for user interaction
-    _showAlarmNotificationDialog();
+    debugPrint('🔊 Audio alarm started independently');
 
-    // 6️⃣ Auto-stop after 40 seconds
-    _alarmStopTimer = Timer(const Duration(seconds: 40), () {
-      _stopExtendedAlarm();
+    // Show in-app dialog if app is active
+    if (mounted) {
+      _showAlarmDialog('Sabbath Reminder');
+    }
+
+    // Auto-stop after 30 seconds to prevent infinite loop
+    _alarmTimer = Timer(const Duration(seconds: 30), () {
+      _stopAlarm();
     });
 
-    // 7️⃣ Try background service as fallback
-    _startBackgroundAlarmService();
-
   } catch (e) {
-    debugPrint('Extended alarm error: $e');
-    // Fallback to short alarm
-    await _playFallbackAlarm();
+    debugPrint('❌ Audio alarm error: $e');
+    setState(() => _isPlayingAlarm = false);
   }
 }
 
-void _startBackgroundAlarmService() {
-  try {
-    final SendPort? send = IsolateNameServer.lookupPortByName('alarm_isolate');
-    send?.send('start_alarm');
-  } catch (e) {
-    debugPrint('Background service not available: $e');
-  }
-}
-
-Future<void> _stopExtendedAlarm() async {
+Future<void> _stopAlarm() async {
   if (!_isPlayingAlarm) return;
-
+  
   try {
-    // Stop main player
-    _alarmStopTimer?.cancel();
     await _audioPlayer.stop();
+    _alarmTimer?.cancel();
+    setState(() => _isPlayingAlarm = false);
     
-    // Stop background service
-    final SendPort? send = IsolateNameServer.lookupPortByName('alarm_isolate');
-    send?.send('stop_alarm');
-    
-    // Update UI
+    // Close any open dialogs
     if (mounted) {
-      setState(() {
-        _isPlayingAlarm = false;
-        _showAlarmDialog = false;
-      });
       Navigator.of(context).popUntil((route) => route.isFirst);
     }
-  } catch (e) {
-    debugPrint('Error stopping extended alarm: $e');
-  }
-}
-
-Future<void> _playFallbackAlarm() async {
-  // Fallback method for older devices
-  try {
-    await _audioPlayer.setVolume(1.0);
-    await _audioPlayer.setReleaseMode(ReleaseMode.loop);
-    await _audioPlayer.play(AssetSource('sounds/notification.mp3'));
     
-    Timer(const Duration(seconds: 40), () async {
-      await _audioPlayer.stop();
-      if (mounted) setState(() => _isPlayingAlarm = false);
-    });
+    debugPrint('🔇 Audio alarm stopped');
   } catch (e) {
-    debugPrint('Fallback alarm error: $e');
+    debugPrint('Error stopping alarm: $e');
   }
 }
 
-void _showAlarmNotificationDialog() {
-  if (!mounted || !_showAlarmDialog) return;
-  
-  showDialog(
-    context: context,
-    barrierDismissible: false,
-    builder: (BuildContext context) {
-      return WillPopScope(
-        onWillPop: () async => false,
-        child: AlertDialog(
-          backgroundColor: const Color(0xFF1E1E1E),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
-          title: const Row(
-            children: [
-              Icon(Icons.notifications_active, color: Color(0xFFF4732F), size: 30),
-              SizedBox(width: 10),
-              Text('Sabbath Reminder', style: TextStyle(color: Colors.white, fontSize: 20)),
-            ],
-          ),
-          content: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Text(
-                'Sabbath time notification',
-                style: TextStyle(color: Colors.white70, fontSize: 16),
-                textAlign: TextAlign.center,
-              ),
-              const SizedBox(height: 20),
-              LinearProgressIndicator(
-                backgroundColor: Colors.grey[700],
-                valueColor: const AlwaysStoppedAnimation<Color>(Color(0xFFF4732F)),
-              ),
-              const SizedBox(height: 10),
-              const Text(
-                'Alarm will stop automatically in 40 seconds',
-                style: TextStyle(color: Colors.white54, fontSize: 12),
-                textAlign: TextAlign.center,
-              ),
-            ],
-          ),
-          actions: [
-            TextButton(
-              onPressed: _stopExtendedAlarm,
-              style: TextButton.styleFrom(
-                backgroundColor: const Color(0xFFF4732F),
-                foregroundColor: Colors.white,
-                shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-              ),
-              child: const Text('STOP ALARM', style: TextStyle(fontWeight: FontWeight.bold)),
-            ),
-          ],
-        ),
-      );
-    },
-  );
-}
-
-// Updated to use AlarmService for 40-second playback
+// Backward compatibility
 Future<void> _playAlarm() async {
-  await _alarmService.startAlarm(
-    title: "Sabbath Reminder",
-    body: "Sabbath time!",
-    durationSeconds: 40,
-  );
-  setState(() {}); // Refresh UI to show stop button
+  await _playAlarmIndependently();
 }
 
   @override
@@ -320,34 +138,14 @@ Future<void> _playAlarm() async {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _initNotification();
-      await _alarmService.initialize(notificationPlugin);
-      await _initBackgroundService();
       await _loadLastLocation();
       await _updateTimes();
       await _loadSavedReminders();
-      await _loadAlarmDuration();
     });
   }
 
-Future<void> _initBackgroundService() async {
-  try {
-    // Initialize background isolate for alarm service
-    await Isolate.spawn(alarmBackgroundHandler, 'init');
-    debugPrint('Background alarm service initialized');
-  } catch (e) {
-    debugPrint('Failed to initialize background service: $e');
-  }
-}
-
   Future<void> _initNotification() async {
     try {
-      // Request notification permission
-      // final status = await Permission.notification.request();
-      // if (!status.isGranted) {
-      //   debugPrint('Notification permission not granted');
-      //   return;
-      // }
-
       // Android-specific permissions
       if (Platform.isAndroid) {
         final batteryStatus =
@@ -372,8 +170,7 @@ Future<void> _initBackgroundService() async {
         tz.setLocalLocation(tz.getLocation(currentTimeZone));
       }
 
-
-      // Notification plugin initialization - using @mipmap/ic_stat
+      // 🔇 SILENT NOTIFICATION SETUP - No built-in sounds
       const AndroidInitializationSettings androidSettings =
           AndroidInitializationSettings('@mipmap/ic_stat');
 
@@ -381,7 +178,7 @@ Future<void> _initBackgroundService() async {
           DarwinInitializationSettings(
             requestAlertPermission: true,
             requestBadgePermission: true,
-            requestSoundPermission: true,
+            requestSoundPermission: false, // ❌ DISABLE built-in sound
           );
 
       const InitializationSettings initializationSettings =
@@ -390,23 +187,17 @@ Future<void> _initBackgroundService() async {
       await notificationPlugin.initialize(
         initializationSettings,
         onDidReceiveNotificationResponse: (details) async {
-          if (details.payload == 'alarm') {
-            // When notification is tapped, start the 40-second alarm
-            await _alarmService.startAlarm(
-              title: "Sabbath Reminder",
-              body: "Sabbath time!",
-              durationSeconds: _alarmDurationSeconds,
-            );
-          } else if (details.payload == 'stop_alarm') {
-            // Stop alarm if user taps stop button
-            await _alarmService.stopAlarm();
+          debugPrint('📱 Notification tapped: ${details.payload}');
+          if (details.payload == 'sabbath_alarm') {
+            // Play our custom audio when notification is tapped
+            await _playAlarmIndependently();
           }
         },
       );
 
-      debugPrint('Notification service initialized');
+      debugPrint('✅ Silent notification service initialized');
     } catch (e) {
-      debugPrint('Error initializing notifications: $e');
+      debugPrint('❌ Error initializing notifications: $e');
     }
   }
 
@@ -508,34 +299,11 @@ Future<void> _loadLastLocation() async {
     });
   }
 
-  Future<void> _loadAlarmDuration() async {
-    final prefs = await SharedPreferences.getInstance();
-    setState(() {
-      _alarmDurationSeconds = prefs.getInt('alarm_duration_seconds') ?? 40;
-    });
-  }
-
-  Future<void> _saveAlarmDuration() async {
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setInt('alarm_duration_seconds', _alarmDurationSeconds);
-  }
-
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       key: _scaffoldKey,
       drawer: AppDrawer(appTitle: 'Sabbath App', appVersion: 'v2.0.4'),
-      floatingActionButton: _alarmService.isPlaying 
-        ? FloatingActionButton.extended(
-            onPressed: () async {
-              await _alarmService.stopAlarm();
-              setState(() {}); // Refresh UI
-            },
-            backgroundColor: Colors.red,
-            icon: const Icon(Icons.stop, color: Colors.white),
-            label: const Text('Stop Alarm', style: TextStyle(color: Colors.white)),
-          )
-        : null,
   body: Stack(
   children: [
     Container(
@@ -557,12 +325,8 @@ Future<void> _loadLastLocation() async {
             _buildAppBar(),
             const SizedBox(height: 20),
             _buildTitle(),
-                              const SizedBox(height: 30),
-                  _buildAudioDurationSelector(),
-                  const SizedBox(height: 20),
-                  Expanded(child: _buildReminderOptions()),
-            const SizedBox(height: 10),
-            _buildTestAlarmButton(),
+            const SizedBox(height: 30),
+            Expanded(child: _buildReminderOptions()),
             const SizedBox(height: 10),
             _buildSaveButton(),
           ],
@@ -571,7 +335,6 @@ Future<void> _loadLastLocation() async {
     ),
   ],
 ),
-
     );
   }
 
@@ -597,121 +360,86 @@ Future<void> _loadLastLocation() async {
     );
   }
 
-
 Future<void> _scheduleAllReminders() async {
+  // Clear all existing notifications and timers
   await notificationPlugin.cancelAll();
-  _alarmService.cancelAllScheduledAlarms(); // Cancel existing alarm schedules
+  _cancelAllAudioTimers();
 
   final now = tz.TZDateTime.now(tz.local);
   final nextStart = _calculateNextSabbathStart(now);
   final nextEnd = _calculateNextSabbathEnd(now);
 
-  debugPrint('\n=== SABBATH REMINDER SCHEDULING ===');
-  debugPrint('⏰ Current Time (Florida): ${now.toLocal()}');
+  debugPrint('\n=== 🕯️ SABBATH REMINDER SCHEDULING ===');
+  debugPrint('⏰ Current Time: ${now.toLocal()}');
   debugPrint('🕯️ Next Sabbath Start: ${nextStart.toLocal()}');
   debugPrint('🔚 Next Sabbath End: ${nextEnd.toLocal()}');
 
-  // Only proceed if the calculated times are in the future
-  if (nextStart.isBefore(now)) {
-    debugPrint('⚠️ Next Sabbath start is in the past! Not scheduling reminders.');
+  // Validate times are in the future
+  if (nextStart.isBefore(now) || nextEnd.isBefore(now)) {
+    debugPrint('⚠️ Sabbath times are in the past! Not scheduling reminders.');
     return;
   }
 
-  if (nextEnd.isBefore(now)) {
-    debugPrint('⚠️ Next Sabbath end is in the past! Not scheduling reminders.');
-    return;
-  }
-
-  // Schedule reminders based on reminderTimes map
+  // Schedule reminders for each selected time
   for (final entry in reminderTimes.entries.where((e) => e.value)) {
     final minutes = entry.key;
     final duration = Duration(minutes: minutes);
 
-    // Start Reminder (Friday)
+    // 🔇 SILENT notification + 🔊 INDEPENDENT audio for Sabbath START
     final startReminderTime = nextStart.subtract(duration);
     if (startReminderTime.isAfter(now)) {
-      await _scheduleWithVerification(
+      await _scheduleNotificationAndAudio(
         id: 'start_$minutes'.hashCode,
         title: 'Sabbath Starts Soon!',
         body: 'Sabbath begins in $minutes minutes',
         scheduledTime: startReminderTime,
       );
-      // 🔔 Schedule alarm for the same time
-      _alarmService.scheduleAlarm(
-        scheduledTime: startReminderTime.toLocal(),
-        title: 'Sabbath Starts Soon!',
-        body: 'Sabbath begins in $minutes minutes',
-        durationSeconds: _alarmDurationSeconds,
-      );
-    } else {
-      debugPrint('⚠️ Start reminder $minutes minutes before is in the past');
     }
 
-    // End Reminder (Saturday)
+    // 🔇 SILENT notification + 🔊 INDEPENDENT audio for Sabbath END
     final endReminderTime = nextEnd.subtract(duration);
     if (endReminderTime.isAfter(now)) {
-      await _scheduleWithVerification(
+      await _scheduleNotificationAndAudio(
         id: 'end_$minutes'.hashCode,
         title: 'Sabbath Ends Soon!',
         body: 'Sabbath ends in $minutes minutes',
         scheduledTime: endReminderTime,
       );
-      // 🔔 Schedule alarm for the same time
-      _alarmService.scheduleAlarm(
-        scheduledTime: endReminderTime.toLocal(),
-        title: 'Sabbath Ends Soon!',
-        body: 'Sabbath ends in $minutes minutes',
-        durationSeconds: _alarmDurationSeconds,
-      );
-    } else {
-      debugPrint('⚠️ End reminder $minutes minutes before is in the past');
     }
   }
 
-  // Only schedule exact notifications if they're in the future
+  // Schedule exact start/end notifications
   if (nextStart.isAfter(now)) {
-    await _scheduleWithVerification(
+    await _scheduleNotificationAndAudio(
       id: 'exact_start'.hashCode,
       title: 'Sabbath Has Started!',
       body: 'Shabbat Shalom!',
       scheduledTime: nextStart,
     );
-    // 🔔 Schedule alarm for exact start time
-    _alarmService.scheduleAlarm(
-      scheduledTime: nextStart.toLocal(),
-      title: 'Sabbath Has Started!',
-      body: 'Shabbat Shalom!',
-      durationSeconds: _alarmDurationSeconds,
-    );
   }
 
   if (nextEnd.isAfter(now)) {
-    await _scheduleWithVerification(
+    await _scheduleNotificationAndAudio(
       id: 'exact_end'.hashCode,
       title: 'Sabbath Has Ended',
       body: 'Have a blessed week!',
       scheduledTime: nextEnd,
     );
-    // 🔔 Schedule alarm for exact end time
-    _alarmService.scheduleAlarm(
-      scheduledTime: nextEnd.toLocal(),
-      title: 'Sabbath Has Ended',
-      body: 'Have a blessed week!',
-      durationSeconds: _alarmDurationSeconds,
-    );
   }
+
+  debugPrint('✅ All reminders scheduled with independent audio');
 }
 
-Future<void> _scheduleWithVerification({
+// 🎯 CORE SOLUTION: Schedule silent notification + independent audio
+Future<void> _scheduleNotificationAndAudio({
   required int id,
   required String title,
   required String body,
   required tz.TZDateTime scheduledTime,
 }) async {
   try {
+    // 1️⃣ Schedule SILENT notification
     await notificationPlugin.cancel(id);
-
-    // Schedule the original notification (unchanged - keeps your existing system)
     await notificationPlugin.zonedSchedule(
       id,
       title,
@@ -719,45 +447,67 @@ Future<void> _scheduleWithVerification({
       scheduledTime,
       NotificationDetails(
         android: AndroidNotificationDetails(
-          'sabbath_channel_id',
-          'Sabbath Reminders',
-          channelDescription: 'Sabbath start and end reminders',
+          'sabbath_silent_channel',
+          'Silent Sabbath Reminders',
+          channelDescription: 'Silent sabbath reminders with custom audio',
           icon: '@mipmap/ic_stat',
           color: const Color(0xFFF4732F),
           importance: Importance.max,
           priority: Priority.high,
-          playSound: true,
-          sound: const RawResourceAndroidNotificationSound('notification'),
+          playSound: false, // ❌ NO built-in sound
           enableVibration: true,
           fullScreenIntent: true,
-          ongoing: true,
           visibility: NotificationVisibility.public,
-          timeoutAfter: 0,
         ),
         iOS: const DarwinNotificationDetails(
-          sound: 'notification.caf',
           presentAlert: true,
           presentBadge: true,
-          presentSound: true,
+          presentSound: false, // ❌ NO built-in sound
           interruptionLevel: InterruptionLevel.timeSensitive,
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      payload: 'alarm',
+      payload: 'sabbath_alarm',
       matchDateTimeComponents: null,
     );
 
-    // Verification
-    final pending = await notificationPlugin.pendingNotificationRequests();
-    if (pending.any((n) => n.id == id)) {
-      debugPrint('✓ Scheduled notification: $title at ${scheduledTime.toLocal()}');
-    } else {
-      debugPrint('✗ Failed to schedule: $title');
-    }
+    // 2️⃣ Schedule INDEPENDENT audio at the same time
+    _scheduleIndependentAudio(scheduledTime, title, id.toString());
+
+    debugPrint('✅ Scheduled: $title at ${scheduledTime.toLocal()}');
   } catch (e) {
-    debugPrint('Error scheduling: $e');
-    rethrow;
+    debugPrint('❌ Error scheduling: $e');
   }
+}
+
+// 🔊 Schedule audio independently using Timer
+void _scheduleIndependentAudio(tz.TZDateTime scheduledTime, String title, String timerId) {
+  final now = tz.TZDateTime.now(tz.local);
+  final delay = scheduledTime.difference(now);
+  
+  if (delay.isNegative) {
+    debugPrint('⚠️ Cannot schedule audio in the past');
+    return;
+  }
+
+  debugPrint('🔊 Audio scheduled for: ${scheduledTime.toLocal()} (in ${delay.inMinutes} minutes)');
+  
+  // Create timer to trigger audio at exact time
+  final timer = Timer(delay, () async {
+    debugPrint('🚨 AUDIO TRIGGER: $title');
+    await _playAlarmIndependently();
+  });
+  
+  // Store timer for cleanup
+  _scheduledAudioTimers[timerId] = timer;
+}
+
+void _cancelAllAudioTimers() {
+  for (final timer in _scheduledAudioTimers.values) {
+    timer.cancel();
+  }
+  _scheduledAudioTimers.clear();
+  debugPrint('🔇 All audio timers cancelled');
 }
 
 tz.TZDateTime _calculateNextSabbathStart(DateTime now) {
@@ -874,13 +624,54 @@ tz.TZDateTime _calculateSunsetTime(tz.TZDateTime date) {
   }
 }
 
-tz.TZDateTime _getNextFriday(tz.TZDateTime now) {
-  final daysUntilFriday = (DateTime.friday - now.weekday + 7) % 7;
-  return tz.TZDateTime(
-    now.location,
-    now.year,
-    now.month,
-    now.day + daysUntilFriday
+// Show in-app alarm dialog when audio plays
+void _showAlarmDialog(String title) {
+  showDialog(
+    context: context,
+    barrierDismissible: false,
+    builder: (BuildContext context) {
+      return AlertDialog(
+        backgroundColor: const Color(0xFF1a1a1a),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        title: Row(
+          children: [
+            const Icon(Icons.access_time, color: Color(0xFFF4732F), size: 28),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Text(
+                title,
+                style: const TextStyle(color: Colors.white, fontSize: 18),
+              ),
+            ),
+          ],
+        ),
+        content: const Text(
+          'Tap "Stop Alarm" to silence the notification sound.',
+          style: TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              _stopAlarm();
+              Navigator.of(context).pop();
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+              decoration: BoxDecoration(
+                gradient: const LinearGradient(
+                  colors: [Color(0xFFFBB13A), Color(0xFFF4732F)],
+                ),
+                borderRadius: BorderRadius.circular(20),
+              ),
+              child: const Text(
+                'Stop Alarm',
+                style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold),
+              ),
+            ),
+          ),
+        ],
+      );
+    },
   );
 }
 
@@ -953,160 +744,58 @@ Widget _buildAppBar() {
     );
   }
 
-  Widget _buildAudioDurationSelector() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24.0),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          const Text(
-            'Audio Duration',
-            style: TextStyle(
-              color: Colors.white,
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-          const SizedBox(height: 10),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            decoration: BoxDecoration(
-              color: Colors.white.withOpacity(0.1),
-              borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: Colors.white.withOpacity(0.3)),
-            ),
-            child: DropdownButtonHideUnderline(
-              child: DropdownButton<int>(
-                value: _alarmDurationSeconds,
-                dropdownColor: const Color(0xFF2C2C2C),
-                style: const TextStyle(color: Colors.white),
-                icon: const Icon(Icons.arrow_drop_down, color: Colors.white),
-                isExpanded: true,
-                onChanged: (int? newValue) {
-                  if (newValue != null) {
-                    setState(() {
-                      _alarmDurationSeconds = newValue;
-                    });
-                    _saveAlarmDuration();
-                  }
-                },
-                items: [
-                  const DropdownMenuItem(value: 10, child: Text('10 seconds')),
-                  const DropdownMenuItem(value: 20, child: Text('20 seconds')),
-                  const DropdownMenuItem(value: 30, child: Text('30 seconds')),
-                  const DropdownMenuItem(value: 40, child: Text('40 seconds')),
-                  const DropdownMenuItem(value: 60, child: Text('1 minute')),
-                  const DropdownMenuItem(value: 90, child: Text('1.5 minutes')),
-                  const DropdownMenuItem(value: 120, child: Text('2 minutes')),
-                  const DropdownMenuItem(value: 180, child: Text('3 minutes')),
-                  const DropdownMenuItem(value: 300, child: Text('5 minutes')),
-                  const DropdownMenuItem(value: 600, child: Text('10 minutes')),
-                ],
-              ),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildSaveButton() {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 90.0), // Pulls button UP a bit
-      child: Align(
-        alignment: Alignment.bottomCenter,
-        child: Container(
-          decoration: BoxDecoration(
-            gradient: const LinearGradient(
-              colors: [Color(0xFFFBB13A), Color(0xFFF4732F)],
-              begin: Alignment.topLeft,
-              end: Alignment.bottomRight,
-            ),
-            borderRadius: BorderRadius.circular(30),
-            boxShadow: [
-              BoxShadow(
-                color: Colors.black.withOpacity(0.25),
-                blurRadius: 10,
-                offset: const Offset(0, 4),
-              ),
-            ],
-          ),
-          child: ElevatedButton(
-            onPressed: _saveReminders,
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.transparent,
-              shadowColor: Colors.transparent,
-              padding:
-                  const EdgeInsets.symmetric(horizontal: 50, vertical: 18),
-              shape: RoundedRectangleBorder(
-                borderRadius: BorderRadius.circular(30),
-              ),
-            ),
-            child: const Text(
-              'SAVE REMINDERS',
-              style: TextStyle(
-                color: Colors.white,
-                fontWeight: FontWeight.w700,
-                fontSize: 18,
-                letterSpacing: 1.2,
-              ),
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildTestAlarmButton() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 24.0),
+Widget _buildSaveButton() {
+  return Padding(
+    padding: const EdgeInsets.only(bottom: 90.0), // Pulls button UP a bit
+    child: Align(
+      alignment: Alignment.bottomCenter,
       child: Container(
         decoration: BoxDecoration(
           gradient: const LinearGradient(
-            colors: [Color(0xFF9C27B0), Color(0xFF673AB7)],
+            colors: [Color(0xFFFBB13A), Color(0xFFF4732F)],
             begin: Alignment.topLeft,
             end: Alignment.bottomRight,
           ),
-          borderRadius: BorderRadius.circular(25),
+          borderRadius: BorderRadius.circular(30),
           boxShadow: [
             BoxShadow(
               color: Colors.black.withOpacity(0.25),
-              blurRadius: 8,
-              offset: const Offset(0, 3),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
             ),
           ],
         ),
         child: ElevatedButton(
-          onPressed: () async {
-            await _playAlarm();
-          },
+          onPressed: _saveReminders,
           style: ElevatedButton.styleFrom(
             backgroundColor: Colors.transparent,
             shadowColor: Colors.transparent,
-            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+            padding:
+                const EdgeInsets.symmetric(horizontal: 50, vertical: 18),
             shape: RoundedRectangleBorder(
-              borderRadius: BorderRadius.circular(25),
+              borderRadius: BorderRadius.circular(30),
             ),
           ),
           child: const Text(
-            'TEST ALARM (40 SEC)',
+            'SAVE REMINDERS',
             style: TextStyle(
               color: Colors.white,
-              fontWeight: FontWeight.w600,
-              fontSize: 16,
-              letterSpacing: 1.0,
+              fontWeight: FontWeight.w700,
+              fontSize: 18,
+              letterSpacing: 1.2,
             ),
           ),
         ),
       ),
-    );
-  }
+    ),
+  );
+}
 
   @override
   void dispose() {
-    _alarmStopTimer?.cancel();
+    _alarmTimer?.cancel();
+    _cancelAllAudioTimers();
     _audioPlayer.dispose();
-    _alarmService.dispose();
     super.dispose();
   }
 }
