@@ -20,6 +20,55 @@ import 'dart:isolate';
 import 'dart:ui';
 import 'package:flutter/services.dart';
 
+// Background notification response handler
+@pragma('vm:entry-point')
+void _onBackgroundNotificationResponse(NotificationResponse details) async {
+  debugPrint('🔔 Background notification received: ${details.payload}');
+  
+  if (details.payload == 'sabbath_notification') {
+    // Initialize audio player for background playback
+    final player = AudioPlayer();
+    
+    try {
+      // Configure for background playback
+      await player.setAudioContext(
+        AudioContext(
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: {
+              AVAudioSessionOptions.defaultToSpeaker,
+              AVAudioSessionOptions.allowBluetooth,
+              AVAudioSessionOptions.allowBluetoothA2DP,
+            },
+          ),
+          android: AudioContextAndroid(
+            isSpeakerphoneOn: true,
+            stayAwake: true,
+            contentType: AndroidContentType.sonification,
+            audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+          ),
+        ),
+      );
+
+      await player.setVolume(1.0);
+      await player.setReleaseMode(ReleaseMode.stop);
+      
+      debugPrint('🔊 Playing background notification sound');
+      await player.play(AssetSource('sounds/notification.mp3'));
+      
+      // Clean up after playback
+      player.onPlayerComplete.listen((_) {
+        player.dispose();
+        debugPrint('✅ Background notification sound completed');
+      });
+      
+    } catch (e) {
+      debugPrint('❌ Background notification error: $e');
+      player.dispose();
+    }
+  }
+}
+
 // Background isolate entry point for alarm service
 @pragma('vm:entry-point')
 void alarmBackgroundHandler(dynamic message) {
@@ -133,8 +182,8 @@ static const Map<String, String> sebastianCoords = {
   Timer? _alarmStopTimer;
   bool _showAlarmDialog = false;
 
-// Enhanced alarm system with background support
-Future<void> _playExtendedAlarm() async {
+  // Enhanced alarm system with background support
+  Future<void> _playExtendedAlarm() async {
   if (_isPlayingAlarm) return;
 
   setState(() {
@@ -203,9 +252,8 @@ void _startBackgroundAlarmService() {
   } catch (e) {
     debugPrint('Background service not available: $e');
   }
-}
 
-Future<void> _stopExtendedAlarm() async {
+  Future<void> _stopExtendedAlarm() async {
   if (!_isPlayingAlarm) return;
 
   try {
@@ -228,9 +276,8 @@ Future<void> _stopExtendedAlarm() async {
   } catch (e) {
     debugPrint('Error stopping extended alarm: $e');
   }
-}
 
-Future<void> _playFallbackAlarm() async {
+  Future<void> _playFallbackAlarm() async {
   // Fallback method for older devices
   try {
     await _audioPlayer.setVolume(1.0);
@@ -244,9 +291,8 @@ Future<void> _playFallbackAlarm() async {
   } catch (e) {
     debugPrint('Fallback alarm error: $e');
   }
-}
 
-void _showAlarmNotificationDialog() {
+  void _showAlarmNotificationDialog() {
   if (!mounted || !_showAlarmDialog) return;
   
   showDialog(
@@ -301,17 +347,17 @@ void _showAlarmNotificationDialog() {
       );
     },
   );
-}
+  }
 
-// Updated to use AlarmService for 40-second playback
-Future<void> _playAlarm() async {
+  // Updated to use AlarmService for 40-second playback
+  Future<void> _playAlarm() async {
   await _alarmService.startAlarm(
     title: "Sabbath Reminder",
     body: "Sabbath time!",
     durationSeconds: 40,
   );
-  setState(() {}); // Refresh UI to show stop button
-}
+    setState(() {}); // Refresh UI to show stop button
+  }
 
   @override
   void initState() {
@@ -329,7 +375,7 @@ Future<void> _playAlarm() async {
     });
   }
 
-Future<void> _initBackgroundService() async {
+  Future<void> _initBackgroundService() async {
   try {
     // Initialize background isolate for alarm service
     await Isolate.spawn(alarmBackgroundHandler, 'init');
@@ -390,7 +436,11 @@ Future<void> _initBackgroundService() async {
       await notificationPlugin.initialize(
         initializationSettings,
         onDidReceiveNotificationResponse: (details) async {
-          if (details.payload == 'alarm') {
+          debugPrint('📱 Notification response: ${details.payload}');
+          if (details.payload == 'sabbath_notification') {
+            // When sabbath notification is received, play full duration sound
+            await _alarmService.playFullNotificationSound();
+          } else if (details.payload == 'alarm') {
             // When notification is tapped, start the 40-second alarm
             await _alarmService.startAlarm(
               title: "Sabbath Reminder",
@@ -402,6 +452,7 @@ Future<void> _initBackgroundService() async {
             await _alarmService.stopAlarm();
           }
         },
+        onDidReceiveBackgroundNotificationResponse: _onBackgroundNotificationResponse,
       );
 
       debugPrint('Notification service initialized');
@@ -410,7 +461,7 @@ Future<void> _initBackgroundService() async {
     }
   }
 
-Future<void> _updateTimes() async {
+  Future<void> _updateTimes() async {
     if (_isLoadingLocation) return;
     setState(() => _isLoadingLocation = true);
 
@@ -455,7 +506,7 @@ Future<void> _updateTimes() async {
     await prefs.setDouble('last_longitude', position.longitude);
   }
 
-Future<void> _loadLastLocation() async {
+  Future<void> _loadLastLocation() async {
   final prefs = await SharedPreferences.getInstance();
 
   try {
@@ -597,8 +648,7 @@ Future<void> _loadLastLocation() async {
     );
   }
 
-
-Future<void> _scheduleAllReminders() async {
+  Future<void> _scheduleAllReminders() async {
   await notificationPlugin.cancelAll();
   _alarmService.cancelAllScheduledAlarms(); // Cancel existing alarm schedules
 
@@ -700,9 +750,8 @@ Future<void> _scheduleAllReminders() async {
       durationSeconds: _alarmDurationSeconds,
     );
   }
-}
 
-Future<void> _scheduleWithVerification({
+  Future<void> _scheduleWithVerification({
   required int id,
   required String title,
   required String body,
@@ -743,7 +792,7 @@ Future<void> _scheduleWithVerification({
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      payload: 'alarm',
+      payload: 'sabbath_notification',
       matchDateTimeComponents: null,
     );
 
@@ -758,9 +807,8 @@ Future<void> _scheduleWithVerification({
     debugPrint('Error scheduling: $e');
     rethrow;
   }
-}
 
-tz.TZDateTime _calculateNextSabbathStart(DateTime now) {
+  tz.TZDateTime _calculateNextSabbathStart(DateTime now) {
   final location = tz.local;
   final localNow = tz.TZDateTime.from(now, location);
   
@@ -799,9 +847,9 @@ tz.TZDateTime _calculateNextSabbathStart(DateTime now) {
   }
   
   return sunset;
-}
+  }
 
-String _weekdayName(int weekday) {
+  String _weekdayName(int weekday) {
   return const [
     'Monday',
     'Tuesday',
@@ -811,7 +859,7 @@ String _weekdayName(int weekday) {
     'Saturday',
     'Sunday',
   ][weekday - 1];
-}
+  }
 
   tz.TZDateTime _calculateNextSabbathEnd(DateTime now) {
     final start = _calculateNextSabbathStart(now);
@@ -834,7 +882,7 @@ String _weekdayName(int weekday) {
     return saturdaySunset;
   }
 
-tz.TZDateTime _calculateSunsetTime(tz.TZDateTime date) {
+  tz.TZDateTime _calculateSunsetTime(tz.TZDateTime date) {
   try {
     final lat = testSebastianMode 
         ? double.parse(sebastianCoords['lat']!)
@@ -872,9 +920,8 @@ tz.TZDateTime _calculateSunsetTime(tz.TZDateTime date) {
     debugPrint("Sunset calculation error: $e");
     return tz.TZDateTime(date.location, date.year, date.month, date.day, 18, 0);
   }
-}
 
-tz.TZDateTime _getNextFriday(tz.TZDateTime now) {
+  tz.TZDateTime _getNextFriday(tz.TZDateTime now) {
   final daysUntilFriday = (DateTime.friday - now.weekday + 7) % 7;
   return tz.TZDateTime(
     now.location,
@@ -882,9 +929,9 @@ tz.TZDateTime _getNextFriday(tz.TZDateTime now) {
     now.month,
     now.day + daysUntilFriday
   );
-}
+  }
 
-Widget _buildAppBar() {
+  Widget _buildAppBar() {
   return Padding(
     padding: const EdgeInsets.symmetric(horizontal: 16.0, vertical: 0.0),
     child: Row(
@@ -910,7 +957,7 @@ Widget _buildAppBar() {
       ],
     ),
   );
-}
+  }
 
   Widget _buildTitle() {
     return const Padding(
