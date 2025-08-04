@@ -13,6 +13,7 @@ class AlarmService {
   Timer? _alarmTimer;
   bool _isPlaying = false;
   late FlutterLocalNotificationsPlugin _notificationPlugin;
+  final List<Timer> _scheduledAlarms = []; // Track scheduled alarms
 
   // Initialize the alarm service
   Future<void> initialize(FlutterLocalNotificationsPlugin notificationPlugin) async {
@@ -143,12 +144,50 @@ class AlarmService {
     );
   }
 
+  // Schedule an alarm to start at a specific time
+  void scheduleAlarm({
+    required DateTime scheduledTime,
+    String title = "Sabbath Reminder",
+    String body = "Sabbath time!",
+    int durationSeconds = 40,
+  }) {
+    final now = DateTime.now();
+    final delay = scheduledTime.difference(now);
+    
+    if (delay.isNegative) {
+      debugPrint('Scheduled time is in the past, not scheduling alarm');
+      return;
+    }
+
+    final timer = Timer(delay, () async {
+      debugPrint('⏰ Scheduled alarm triggered at ${DateTime.now()}');
+      await startAlarm(
+        title: title,
+        body: body,
+        durationSeconds: durationSeconds,
+      );
+    });
+
+    _scheduledAlarms.add(timer);
+    debugPrint('🔔 Alarm scheduled for ${scheduledTime.toLocal()} (in ${delay.inMinutes} minutes)');
+  }
+
+  // Cancel all scheduled alarms
+  void cancelAllScheduledAlarms() {
+    for (final timer in _scheduledAlarms) {
+      timer.cancel();
+    }
+    _scheduledAlarms.clear();
+    debugPrint('❌ All scheduled alarms cancelled');
+  }
+
   // Check if alarm is currently playing
   bool get isPlaying => _isPlaying;
 
   // Dispose resources
   void dispose() {
     _alarmTimer?.cancel();
+    cancelAllScheduledAlarms();
     _audioPlayer.dispose();
   }
 }

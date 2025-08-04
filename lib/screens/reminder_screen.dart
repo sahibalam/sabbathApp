@@ -387,7 +387,7 @@ Future<void> _initBackgroundService() async {
         initializationSettings,
         onDidReceiveNotificationResponse: (details) async {
           if (details.payload == 'alarm') {
-            // Use AlarmService for 40-second audio playback
+            // When notification is tapped, start the 40-second alarm
             await _alarmService.startAlarm(
               title: "Sabbath Reminder",
               body: "Sabbath time!",
@@ -582,6 +582,7 @@ Future<void> _loadLastLocation() async {
 
 Future<void> _scheduleAllReminders() async {
   await notificationPlugin.cancelAll();
+  _alarmService.cancelAllScheduledAlarms(); // Cancel existing alarm schedules
 
   final now = tz.TZDateTime.now(tz.local);
   final nextStart = _calculateNextSabbathStart(now);
@@ -617,6 +618,13 @@ Future<void> _scheduleAllReminders() async {
         body: 'Sabbath begins in $minutes minutes',
         scheduledTime: startReminderTime,
       );
+      // 🔔 Schedule 40-second alarm for the same time
+      _alarmService.scheduleAlarm(
+        scheduledTime: startReminderTime.toLocal(),
+        title: 'Sabbath Starts Soon!',
+        body: 'Sabbath begins in $minutes minutes',
+        durationSeconds: 40,
+      );
     } else {
       debugPrint('⚠️ Start reminder $minutes minutes before is in the past');
     }
@@ -629,6 +637,13 @@ Future<void> _scheduleAllReminders() async {
         title: 'Sabbath Ends Soon!',
         body: 'Sabbath ends in $minutes minutes',
         scheduledTime: endReminderTime,
+      );
+      // 🔔 Schedule 40-second alarm for the same time
+      _alarmService.scheduleAlarm(
+        scheduledTime: endReminderTime.toLocal(),
+        title: 'Sabbath Ends Soon!',
+        body: 'Sabbath ends in $minutes minutes',
+        durationSeconds: 40,
       );
     } else {
       debugPrint('⚠️ End reminder $minutes minutes before is in the past');
@@ -643,6 +658,13 @@ Future<void> _scheduleAllReminders() async {
       body: 'Shabbat Shalom!',
       scheduledTime: nextStart,
     );
+    // 🔔 Schedule 40-second alarm for exact start time
+    _alarmService.scheduleAlarm(
+      scheduledTime: nextStart.toLocal(),
+      title: 'Sabbath Has Started!',
+      body: 'Shabbat Shalom!',
+      durationSeconds: 40,
+    );
   }
 
   if (nextEnd.isAfter(now)) {
@@ -651,6 +673,13 @@ Future<void> _scheduleAllReminders() async {
       title: 'Sabbath Has Ended',
       body: 'Have a blessed week!',
       scheduledTime: nextEnd,
+    );
+    // 🔔 Schedule 40-second alarm for exact end time
+    _alarmService.scheduleAlarm(
+      scheduledTime: nextEnd.toLocal(),
+      title: 'Sabbath Has Ended',
+      body: 'Have a blessed week!',
+      durationSeconds: 40,
     );
   }
 }
@@ -664,6 +693,7 @@ Future<void> _scheduleWithVerification({
   try {
     await notificationPlugin.cancel(id);
 
+    // Schedule the original notification (unchanged - keeps your existing system)
     await notificationPlugin.zonedSchedule(
       id,
       title,
@@ -696,14 +726,13 @@ Future<void> _scheduleWithVerification({
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       payload: 'alarm',
-      // Correct parameter for time handling:
-      matchDateTimeComponents: null, // Explicitly disable repeating
+      matchDateTimeComponents: null,
     );
 
     // Verification
     final pending = await notificationPlugin.pendingNotificationRequests();
     if (pending.any((n) => n.id == id)) {
-      debugPrint('✓ Scheduled: $title at ${scheduledTime.toLocal()}');
+      debugPrint('✓ Scheduled notification: $title at ${scheduledTime.toLocal()}');
     } else {
       debugPrint('✗ Failed to schedule: $title');
     }
