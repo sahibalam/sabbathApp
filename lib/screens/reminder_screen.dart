@@ -8,6 +8,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:sabbath_app/spa/suncal.dart';
 import 'package:sabbath_app/utility/appdrawer.dart';
 import 'package:sabbath_app/utility/location_helper.dart';
+import 'package:sabbath_app/services/alarm_service.dart';
 import 'package:timezone/timezone.dart' as tz;
 import 'package:timezone/data/latest.dart' as tz;
 import 'package:flutter_timezone/flutter_timezone.dart';
@@ -125,6 +126,7 @@ static const Map<String, String> sebastianCoords = {
 
   final AudioPlayer _audioPlayer = AudioPlayer();
   bool _isPlayingAlarm = false;
+  final AlarmService _alarmService = AlarmService();
   Timer? _alarmStopTimer;
   bool _showAlarmDialog = false;
 
@@ -298,10 +300,14 @@ void _showAlarmNotificationDialog() {
   );
 }
 
-// Keep the original method for backward compatibility
+// Updated to use AlarmService for 40-second playback
 Future<void> _playAlarm() async {
-  // Use the enhanced version
-  await _playExtendedAlarm();
+  await _alarmService.startAlarm(
+    title: "Sabbath Reminder",
+    body: "Sabbath time!",
+    durationSeconds: 40,
+  );
+  setState(() {}); // Refresh UI to show stop button
 }
 
   @override
@@ -311,6 +317,7 @@ Future<void> _playAlarm() async {
 
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       await _initNotification();
+      await _alarmService.initialize(notificationPlugin);
       await _initBackgroundService();
       await _loadLastLocation();
       await _updateTimes();
@@ -379,9 +386,16 @@ Future<void> _initBackgroundService() async {
       await notificationPlugin.initialize(
         initializationSettings,
         onDidReceiveNotificationResponse: (details) async {
-          // Enhanced notification response - trigger extended alarm
           if (details.payload == 'alarm') {
-            await _playExtendedAlarm();
+            // When notification is tapped, start the 40-second alarm
+            await _alarmService.startAlarm(
+              title: "Sabbath Reminder",
+              body: "Sabbath time!",
+              durationSeconds: 40,
+            );
+          } else if (details.payload == 'stop_alarm') {
+            // Stop alarm if user taps stop button
+            await _alarmService.stopAlarm();
           }
         },
       );
@@ -495,6 +509,17 @@ Future<void> _loadLastLocation() async {
     return Scaffold(
       key: _scaffoldKey,
       drawer: AppDrawer(appTitle: 'Sabbath App', appVersion: 'v2.0.4'),
+      floatingActionButton: _alarmService.isPlaying 
+        ? FloatingActionButton.extended(
+            onPressed: () async {
+              await _alarmService.stopAlarm();
+              setState(() {}); // Refresh UI
+            },
+            backgroundColor: Colors.red,
+            icon: const Icon(Icons.stop, color: Colors.white),
+            label: const Text('Stop Alarm', style: TextStyle(color: Colors.white)),
+          )
+        : null,
   body: Stack(
   children: [
     Container(
@@ -518,6 +543,8 @@ Future<void> _loadLastLocation() async {
             _buildTitle(),
             const SizedBox(height: 30),
             Expanded(child: _buildReminderOptions()),
+            const SizedBox(height: 10),
+            _buildTestAlarmButton(),
             const SizedBox(height: 10),
             _buildSaveButton(),
           ],
@@ -555,6 +582,7 @@ Future<void> _loadLastLocation() async {
 
 Future<void> _scheduleAllReminders() async {
   await notificationPlugin.cancelAll();
+  _alarmService.cancelAllScheduledAlarms(); // Cancel existing alarm schedules
 
   final now = tz.TZDateTime.now(tz.local);
   final nextStart = _calculateNextSabbathStart(now);
@@ -590,6 +618,13 @@ Future<void> _scheduleAllReminders() async {
         body: 'Sabbath begins in $minutes minutes',
         scheduledTime: startReminderTime,
       );
+      // 🔔 Schedule 40-second alarm for the same time
+      _alarmService.scheduleAlarm(
+        scheduledTime: startReminderTime.toLocal(),
+        title: 'Sabbath Starts Soon!',
+        body: 'Sabbath begins in $minutes minutes',
+        durationSeconds: 40,
+      );
     } else {
       debugPrint('⚠️ Start reminder $minutes minutes before is in the past');
     }
@@ -602,6 +637,13 @@ Future<void> _scheduleAllReminders() async {
         title: 'Sabbath Ends Soon!',
         body: 'Sabbath ends in $minutes minutes',
         scheduledTime: endReminderTime,
+      );
+      // 🔔 Schedule 40-second alarm for the same time
+      _alarmService.scheduleAlarm(
+        scheduledTime: endReminderTime.toLocal(),
+        title: 'Sabbath Ends Soon!',
+        body: 'Sabbath ends in $minutes minutes',
+        durationSeconds: 40,
       );
     } else {
       debugPrint('⚠️ End reminder $minutes minutes before is in the past');
@@ -616,6 +658,13 @@ Future<void> _scheduleAllReminders() async {
       body: 'Shabbat Shalom!',
       scheduledTime: nextStart,
     );
+    // 🔔 Schedule 40-second alarm for exact start time
+    _alarmService.scheduleAlarm(
+      scheduledTime: nextStart.toLocal(),
+      title: 'Sabbath Has Started!',
+      body: 'Shabbat Shalom!',
+      durationSeconds: 40,
+    );
   }
 
   if (nextEnd.isAfter(now)) {
@@ -624,6 +673,13 @@ Future<void> _scheduleAllReminders() async {
       title: 'Sabbath Has Ended',
       body: 'Have a blessed week!',
       scheduledTime: nextEnd,
+    );
+    // 🔔 Schedule 40-second alarm for exact end time
+    _alarmService.scheduleAlarm(
+      scheduledTime: nextEnd.toLocal(),
+      title: 'Sabbath Has Ended',
+      body: 'Have a blessed week!',
+      durationSeconds: 40,
     );
   }
 }
@@ -637,6 +693,7 @@ Future<void> _scheduleWithVerification({
   try {
     await notificationPlugin.cancel(id);
 
+    // Schedule the original notification (unchanged - keeps your existing system)
     await notificationPlugin.zonedSchedule(
       id,
       title,
@@ -669,14 +726,13 @@ Future<void> _scheduleWithVerification({
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
       payload: 'alarm',
-      // Correct parameter for time handling:
-      matchDateTimeComponents: null, // Explicitly disable repeating
+      matchDateTimeComponents: null,
     );
 
     // Verification
     final pending = await notificationPlugin.pendingNotificationRequests();
     if (pending.any((n) => n.id == id)) {
-      debugPrint('✓ Scheduled: $title at ${scheduledTime.toLocal()}');
+      debugPrint('✓ Scheduled notification: $title at ${scheduledTime.toLocal()}');
     } else {
       debugPrint('✗ Failed to schedule: $title');
     }
@@ -926,10 +982,56 @@ Widget _buildSaveButton() {
   );
 }
 
+  Widget _buildTestAlarmButton() {
+    return Padding(
+      padding: const EdgeInsets.symmetric(horizontal: 24.0),
+      child: Container(
+        decoration: BoxDecoration(
+          gradient: const LinearGradient(
+            colors: [Color(0xFF9C27B0), Color(0xFF673AB7)],
+            begin: Alignment.topLeft,
+            end: Alignment.bottomRight,
+          ),
+          borderRadius: BorderRadius.circular(25),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withOpacity(0.25),
+              blurRadius: 8,
+              offset: const Offset(0, 3),
+            ),
+          ],
+        ),
+        child: ElevatedButton(
+          onPressed: () async {
+            await _playAlarm();
+          },
+          style: ElevatedButton.styleFrom(
+            backgroundColor: Colors.transparent,
+            shadowColor: Colors.transparent,
+            padding: const EdgeInsets.symmetric(horizontal: 40, vertical: 15),
+            shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(25),
+            ),
+          ),
+          child: const Text(
+            'TEST ALARM (40 SEC)',
+            style: TextStyle(
+              color: Colors.white,
+              fontWeight: FontWeight.w600,
+              fontSize: 16,
+              letterSpacing: 1.0,
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+
   @override
   void dispose() {
     _alarmStopTimer?.cancel();
     _audioPlayer.dispose();
+    _alarmService.dispose();
     super.dispose();
   }
 }
