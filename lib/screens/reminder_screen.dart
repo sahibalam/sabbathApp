@@ -20,6 +20,55 @@ import 'dart:isolate';
 import 'dart:ui';
 import 'package:flutter/services.dart';
 
+// Background notification response handler
+@pragma('vm:entry-point')
+void _onBackgroundNotificationResponse(NotificationResponse details) async {
+  debugPrint('🔔 Background notification received: ${details.payload}');
+  
+  if (details.payload == 'sabbath_notification') {
+    // Initialize audio player for background playback
+    final player = AudioPlayer();
+    
+    try {
+      // Configure for background playback
+      await player.setAudioContext(
+        AudioContext(
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: {
+              AVAudioSessionOptions.defaultToSpeaker,
+              AVAudioSessionOptions.allowBluetooth,
+              AVAudioSessionOptions.allowBluetoothA2DP,
+            },
+          ),
+          android: AudioContextAndroid(
+            isSpeakerphoneOn: true,
+            stayAwake: true,
+            contentType: AndroidContentType.sonification,
+            audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+          ),
+        ),
+      );
+
+      await player.setVolume(1.0);
+      await player.setReleaseMode(ReleaseMode.stop);
+      
+      debugPrint('🔊 Playing background notification sound');
+      await player.play(AssetSource('sounds/notification.mp3'));
+      
+      // Clean up after playback
+      player.onPlayerComplete.listen((_) {
+        player.dispose();
+        debugPrint('✅ Background notification sound completed');
+      });
+      
+    } catch (e) {
+      debugPrint('❌ Background notification error: $e');
+      player.dispose();
+    }
+  }
+}
+
 // Background isolate entry point for alarm service
 @pragma('vm:entry-point')
 void alarmBackgroundHandler(dynamic message) {
@@ -390,7 +439,11 @@ Future<void> _initBackgroundService() async {
       await notificationPlugin.initialize(
         initializationSettings,
         onDidReceiveNotificationResponse: (details) async {
-          if (details.payload == 'alarm') {
+          debugPrint('📱 Notification response: ${details.payload}');
+          if (details.payload == 'sabbath_notification') {
+            // When sabbath notification is received, play full duration sound
+            await _alarmService.playFullNotificationSound();
+          } else if (details.payload == 'alarm') {
             // When notification is tapped, start the 40-second alarm
             await _alarmService.startAlarm(
               title: "Sabbath Reminder",
@@ -402,6 +455,7 @@ Future<void> _initBackgroundService() async {
             await _alarmService.stopAlarm();
           }
         },
+        onDidReceiveBackgroundNotificationResponse: _onBackgroundNotificationResponse,
       );
 
       debugPrint('Notification service initialized');
@@ -743,7 +797,7 @@ Future<void> _scheduleWithVerification({
         ),
       ),
       androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
-      payload: 'alarm',
+      payload: 'sabbath_notification',
       matchDateTimeComponents: null,
     );
 

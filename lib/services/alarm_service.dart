@@ -181,6 +181,65 @@ class AlarmService {
     debugPrint('❌ All scheduled alarms cancelled');
   }
 
+  // Play full notification sound (29 seconds) when notification is received
+  Future<void> playFullNotificationSound() async {
+    if (_isPlaying) {
+      debugPrint('⚠️ Alarm already playing, stopping current to play notification');
+      await stopAlarm();
+    }
+
+    try {
+      _isPlaying = true;
+      
+      // Configure audio for background notification playback
+      await _audioPlayer.setAudioContext(
+        AudioContext(
+          iOS: AudioContextIOS(
+            category: AVAudioSessionCategory.playback,
+            options: {
+              AVAudioSessionOptions.defaultToSpeaker,
+              AVAudioSessionOptions.allowBluetooth,
+              AVAudioSessionOptions.allowBluetoothA2DP,
+            },
+          ),
+          android: AudioContextAndroid(
+            isSpeakerphoneOn: true,
+            stayAwake: true,
+            contentType: AndroidContentType.sonification,
+            audioFocus: AndroidAudioFocus.gainTransientMayDuck,
+          ),
+        ),
+      );
+
+      // Set volume to maximum
+      await _audioPlayer.setVolume(1.0);
+      
+      // Play the full notification file (let it play completely)
+      await _audioPlayer.setReleaseMode(ReleaseMode.stop);
+      
+      debugPrint('🔊 Playing full notification sound (29 seconds)');
+      await _audioPlayer.play(AssetSource('sounds/notification.mp3'));
+      
+      // Set timer to reset playing state after the full duration
+      _alarmTimer?.cancel();
+      _alarmTimer = Timer(const Duration(seconds: 30), () {
+        _isPlaying = false;
+        debugPrint('🔇 Full notification sound completed');
+      });
+      
+      // Listen for completion
+      _audioPlayer.onPlayerComplete.listen((_) {
+        _isPlaying = false;
+        _alarmTimer?.cancel();
+        debugPrint('✅ Notification sound playback completed naturally');
+      });
+      
+    } catch (e) {
+      debugPrint('❌ Error playing full notification sound: $e');
+      _isPlaying = false;
+    }
+  }
+
   // Check if alarm is currently playing
   bool get isPlaying => _isPlaying;
 
