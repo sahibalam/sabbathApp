@@ -20,7 +20,7 @@ import 'package:flutter/services.dart';
 
 // Background isolate entry point for alarm service
 @pragma('vm:entry-point')
-void alarmBackgroundHandler() {
+void alarmBackgroundHandler(dynamic message) {
   WidgetsFlutterBinding.ensureInitialized();
   
   final ReceivePort port = ReceivePort();
@@ -321,7 +321,7 @@ Future<void> _playAlarm() async {
 Future<void> _initBackgroundService() async {
   try {
     // Initialize background isolate for alarm service
-    await Isolate.spawn(alarmBackgroundHandler, null);
+    await Isolate.spawn(alarmBackgroundHandler, 'init');
     debugPrint('Background alarm service initialized');
   } catch (e) {
     debugPrint('Failed to initialize background service: $e');
